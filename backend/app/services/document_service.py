@@ -10,7 +10,7 @@ from app.database import get_supabase
 CHUNK_SIZE = 300
 CHUNK_OVERLAP = 30
 
-_model = SentenceTransformer("all-MiniLM-L6-v2")
+_model = SentenceTransformer("all-MiniLM-L6-v2", backend="onnx")
 
 
 def _get_embedding(text: str) -> List[float]:
