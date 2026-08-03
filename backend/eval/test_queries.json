@@ -1,0 +1,27 @@
+[
+  {
+    "question": "what is dynamic programming?",
+    "expected_filename": "06DynamicProgramming.pdf",
+    "notes": "should retrieve DP definition chunk"
+  },
+  {
+    "question": "what is memoization?",
+    "expected_filename": "06DynamicProgramming.pdf",
+    "notes": "memoization is a DP technique"
+  },
+  {
+    "question": "what is the knapsack problem?",
+    "expected_filename": "06DynamicProgramming.pdf",
+    "notes": "classic DP problem"
+  },
+  {
+    "question": "what is the SAT problem?",
+    "expected_filename": "3-SAT PROBLEM.pdf",
+    "notes": "boolean satisfiability"
+  },
+  {
+    "question": "what is NP completeness?",
+    "expected_filename": "3-SAT PROBLEM.pdf",
+    "notes": "NP-hard complexity class"
+  }
+]
