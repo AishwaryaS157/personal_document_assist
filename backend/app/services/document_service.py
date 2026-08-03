@@ -3,18 +3,12 @@ from pathlib import Path
 from typing import List, Dict, Any
 
 import pdfplumber
-from sentence_transformers import SentenceTransformer
 
 from app.database import get_supabase
+from app.services.embedding_service import get_embedding as _get_embedding
 
 CHUNK_SIZE = 300
 CHUNK_OVERLAP = 30
-
-_model = SentenceTransformer("all-MiniLM-L6-v2", backend="onnx")
-
-
-def _get_embedding(text: str) -> List[float]:
-    return _model.encode(text).tolist()
 
 
 def _chunk_text(text: str) -> List[str]:
