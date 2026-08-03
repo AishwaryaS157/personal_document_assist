@@ -3,8 +3,8 @@ import os
 from typing import AsyncGenerator, List, Dict, Any
 
 from dotenv import load_dotenv
-from google import genai
-from google.genai import types
+from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 load_dotenv()
 
@@ -20,7 +20,7 @@ MODEL_NAME = "gemini-2.5-flash"
 CITATION_THRESHOLD = 0.016
 MAX_SOURCES_IN_CONTEXT = 5
 
-_client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+_llm = ChatGoogleGenerativeAI(model=MODEL_NAME, api_key=os.environ["GEMINI_API_KEY"])
 
 
 def _build_context(sources: List[Dict[str, Any]]) -> str:
@@ -57,14 +57,13 @@ async def stream_chat(
 User question: {message}"""
 
     try:
-        stream = await _client.aio.models.generate_content_stream(
-            model=MODEL_NAME,
-            contents=user_message,
-            config=types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT),
-        )
-        async for chunk in stream:
-            if chunk.text:
-                yield json.dumps({"type": "text", "data": chunk.text}) + "\n"
+        messages = [
+            SystemMessage(content=SYSTEM_PROMPT),
+            HumanMessage(content=user_message),
+        ]
+        async for chunk in _llm.astream(messages):
+            if chunk.content:
+                yield json.dumps({"type": "text", "data": chunk.content}) + "\n"
     except Exception as e:
         yield json.dumps({"type": "error", "data": str(e)}) + "\n"
         return

@@ -3,24 +3,22 @@ from pathlib import Path
 from typing import List, Dict, Any
 
 import pdfplumber
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.database import get_supabase
 from app.services.embedding_service import get_embedding as _get_embedding
 
-CHUNK_SIZE = 300
-CHUNK_OVERLAP = 30
+CHUNK_SIZE = 1500
+CHUNK_OVERLAP = 150
+
+_splitter = RecursiveCharacterTextSplitter(
+    chunk_size=CHUNK_SIZE,
+    chunk_overlap=CHUNK_OVERLAP,
+)
 
 
 def _chunk_text(text: str) -> List[str]:
-    words = text.split()
-    chunks, start = [], 0
-    while start < len(words):
-        end = start + CHUNK_SIZE
-        chunks.append(" ".join(words[start:end]))
-        if end >= len(words):
-            break
-        start += CHUNK_SIZE - CHUNK_OVERLAP
-    return chunks
+    return _splitter.split_text(text)
 
 
 def _extract_text(file_bytes: bytes, filename: str) -> str:
