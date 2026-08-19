@@ -1,87 +1,333 @@
+"""Recall@K / MRR evaluation for the hybrid retrieval pipeline.
+
+Scores three rankers independently off a single candidate fetch:
+
+    dense  - vector similarity only
+    fts    - Postgres full-text only
+    rrf    - the two fused with Reciprocal Rank Fusion (what /chat uses)
+
+Reporting all three is the point: a hybrid pipeline is only worth its
+complexity if fusion beats both arms on their own, and a fused-only number
+cannot show that.
+
+Labels live in test_queries.json:
+
+    {
+      "question":          "what is memoization?",
+      "expected_filename": "06DynamicProgramming.pdf",   # required
+      "expected_snippet":  "storing the results of"      # optional
+    }
+
+With expected_snippet the query is scored at PASSAGE level: a retrieved chunk
+counts only if it comes from the right file AND contains that text. Without it
+the query falls back to DOCUMENT level (right file, any chunk), which is a much
+weaker bar. The summary reports how many of each you have, so the numbers are
+never stronger than the labels behind them.
+
+Snippets rather than chunk ids: chunk UUIDs are regenerated on every re-ingest,
+so id-based labels break as soon as a document is re-uploaded.
+
+    python eval/recall_eval.py --user-id <uuid>
+    python eval/recall_eval.py --user-id <uuid> --inspect "what is memoization?"
+"""
 import argparse
 import json
-import os
+import re
 import sys
 from pathlib import Path
-from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
-from app.services.document_service import search_documents
+from app.database import get_supabase
+from app.services.embedding_service import get_embedding
+from app.services.document_service import MAX_RRF_SCORE, search_documents
+
+# Imported, never copied: a hardcoded duplicate would drift the day the real
+# threshold is tuned, and the eval would quietly stop describing production.
+try:
+    from app.services.llm_service import CITATION_THRESHOLD
+except Exception as exc:  # llm_service builds its client at import time
+    CITATION_THRESHOLD = None
+    _THRESHOLD_ERR = exc
+
+ARMS = ("dense", "fts", "rrf")
+ARM_LABELS = {"dense": "dense (vector)", "fts": "fts (keyword)", "rrf": "rrf (fused)"}
+
+# Default n_sources on ChatRequest: how many chunks /chat actually considers.
+N_SOURCES = 5
 
 
-def run_eval(user_id: str, queries_path: str, ks: list[int]) -> None:
-    with open(queries_path) as f:
-        queries = json.load(f)
+def fetch_candidates(question: str, user_id: str, candidate_depth: int) -> list[dict]:
+    supabase = get_supabase()
+    result = supabase.rpc("search_chunks_eval", {
+        "query_embedding": get_embedding(question),
+        "query_text": question,
+        "user_id_filter": user_id,
+        "candidate_depth": candidate_depth,
+    }).execute()
+    return result.data
 
+
+def rank_by_arm(rows: list[dict], arm: str) -> list[dict]:
+    """Re-sort the shared candidate pool into one arm's own ranking."""
+    if arm == "dense":
+        scoped = [r for r in rows if r["dense_rank"] is not None]
+        return sorted(scoped, key=lambda r: r["dense_rank"])
+    if arm == "fts":
+        scoped = [r for r in rows if r["fts_rank"] is not None]
+        return sorted(scoped, key=lambda r: r["fts_rank"])
+    return sorted(rows, key=lambda r: -r["rrf_score"])
+
+
+def _norm(text: str) -> str:
+    return re.sub(r"\s+", " ", text or "").strip().lower()
+
+
+def is_hit(row: dict, label: dict) -> bool:
+    if row["filename"] != label["expected_filename"]:
+        return False
+    snippet = label.get("expected_snippet")
+    if snippet:
+        return _norm(snippet) in _norm(row["content"])
+    return True
+
+
+def granularity(label: dict) -> str:
+    return "passage" if label.get("expected_snippet") else "document"
+
+
+def suppressed_by_threshold(candidates: list[dict]) -> bool:
+    """True if /chat would show no citations at all for this query.
+
+    llm_service drops the entire source list when the best normalized score
+    falls under CITATION_THRESHOLD, so a chunk that ranks well but scores low
+    is retrieved and never delivered. Recall alone cannot see that.
+    """
+    if CITATION_THRESHOLD is None:
+        return False
+    top = rank_by_arm(candidates, "rrf")[:N_SOURCES]
+    best = max((r["rrf_score"] for r in top), default=0.0)
+    return min(best / MAX_RRF_SCORE, 1.0) < CITATION_THRESHOLD
+
+
+def check_parity(question: str, user_id: str) -> bool:
+    """Confirm search_chunks_eval ranks identically to the production path.
+
+    The eval reads its own SQL function, so without this the two could drift
+    (a retuned k, a different candidate depth) and the report would describe a
+    pipeline that no longer ships.
+    """
+    prod = [(r["filename"], r["chunk_index"])
+            for r in search_documents(question, user_id, n_results=N_SOURCES)]
+    mine = [(r["filename"], r["chunk_index"])
+            for r in rank_by_arm(fetch_candidates(question, user_id, 50), "rrf")[:N_SOURCES]]
+    return prod == mine
+
+
+def evaluate(queries, user_id, ks, candidate_depth):
     max_k = max(ks)
-    results = []
+    totals = {a: {"hits": {k: 0 for k in ks}, "rr": 0.0} for a in ARMS}
+    totals["delivered"] = {k: 0 for k in ks}
+    details = []
 
-    print(f"\n{'='*60}")
-    print(f"  Hybrid Search Recall Evaluation")
-    print(f"  Queries: {len(queries)}  |  K values: {ks}")
-    print(f"{'='*60}\n")
+    for i, label in enumerate(queries, 1):
+        question = label["question"]
+        candidates = fetch_candidates(question, user_id, candidate_depth)
+        record = {"question": question, "granularity": granularity(label), "arms": {}}
 
-    for i, q in enumerate(queries, 1):
-        question         = q["question"]
-        expected_file    = q["expected_filename"]
-        notes            = q.get("notes", "")
+        for arm in ARMS:
+            ranked = rank_by_arm(candidates, arm)[:max_k]
+            flags = [is_hit(r, label) for r in ranked]
+            first = next((j + 1 for j, hit in enumerate(flags) if hit), None)
 
-        retrieved = search_documents(question, user_id, n_results=max_k)
-        retrieved_files = [r["filename"] for r in retrieved]
+            for k in ks:
+                if any(flags[:k]):
+                    totals[arm]["hits"][k] += 1
+            totals[arm]["rr"] += (1.0 / first) if first else 0.0
+            record["arms"][arm] = {"first_hit_rank": first, "top": ranked[:3]}
 
-        hit_at = {}
+        # What the user actually receives: a correct chunk that the citation
+        # threshold then suppresses counts as a miss.
+        record["suppressed"] = suppressed_by_threshold(candidates)
+        rrf_first = record["arms"]["rrf"]["first_hit_rank"]
         for k in ks:
-            hit_at[k] = expected_file in retrieved_files[:k]
+            if rrf_first and rrf_first <= k and not record["suppressed"]:
+                totals["delivered"][k] += 1
 
-        results.append({"question": question, "expected": expected_file,
-                        "retrieved_files": retrieved_files, "hit_at": hit_at})
+        details.append(record)
+        mark = "✓" if rrf_first else "✗"
+        ranks = "  ".join(
+            f"{arm}={record['arms'][arm]['first_hit_rank'] or '—'}" for arm in ARMS
+        )
+        flag = "  [SUPPRESSED by citation threshold]" if record["suppressed"] else ""
+        print(f"[{i}/{len(queries)}] {mark} {question}")
+        print(f"          {granularity(label):<8} label | first hit: {ranks}{flag}")
 
-        status = "✓" if hit_at[max_k] else "✗"
-        print(f"[{i}/{len(queries)}] {status}  {question}")
-        print(f"         Expected : {expected_file}")
-        print(f"         Retrieved: {retrieved_files[:max_k]}")
-        for k in ks:
-            mark = "HIT " if hit_at[k] else "MISS"
-            print(f"         Recall@{k} : {mark}")
-        if notes:
-            print(f"         Notes    : {notes}")
-        print()
+    return totals, details
 
-    print(f"{'='*60}")
-    print(f"  SUMMARY")
-    print(f"{'='*60}")
-    for k in ks:
-        hits = sum(1 for r in results if r["hit_at"][k])
-        recall = hits / len(results)
-        bar = "█" * int(recall * 20) + "░" * (20 - int(recall * 20))
-        print(f"  Recall@{k}  [{bar}]  {hits}/{len(results)} = {recall:.1%}")
 
-    print()
+def report(totals, details, queries, ks):
+    n = len(queries)
+    passage = sum(1 for q in queries if granularity(q) == "passage")
 
-    failures = [r for r in results if not r["hit_at"][max_k]]
-    if failures:
-        print(f"  FAILED QUERIES (not in top-{max_k}):")
-        for r in failures:
-            print(f"    • \"{r['question']}\"")
-            print(f"      Expected: {r['expected']}")
-            print(f"      Got     : {r['retrieved_files'][:3]}")
+    print(f"\n{'=' * 68}")
+    print("  SUMMARY")
+    print(f"{'=' * 68}")
+    header = f"  {'ranker':<16}" + "".join(f"{'R@' + str(k):>9}" for k in ks) + f"{'MRR':>9}"
+    print(header)
+    print(f"  {'-' * (len(header) - 2)}")
+    for arm in ARMS:
+        cells = "".join(f"{totals[arm]['hits'][k] / n:>8.1%} " for k in ks)
+        print(f"  {ARM_LABELS[arm]:<16}{cells}{totals[arm]['rr'] / n:>8.3f}")
+
+    delivered = "".join(f"{totals['delivered'][k] / n:>8.1%} " for k in ks)
+    print(f"  {'delivered':<16}{delivered}{'—':>8}")
+    print("  (delivered = rrf hit that also survives the citation threshold,")
+    print("   i.e. what the user actually sees cited)")
+
+    best_single = max(totals[a]["rr"] for a in ("dense", "fts"))
+    delta = totals["rrf"]["rr"] - best_single
+    verdict = "fusion beats both arms" if delta > 0 else "fusion does NOT beat the best single arm"
+    print(f"\n  MRR delta vs best single arm: {delta:+.3f}  ->  {verdict}")
+
+    if CITATION_THRESHOLD is None:
+        print(f"\n  ⚠  Citation threshold unavailable ({type(_THRESHOLD_ERR).__name__}); "
+              "delivered row assumes nothing is suppressed.")
     else:
-        print(f"  All queries found in top-{max_k}!")
+        gap = totals["rrf"]["hits"][max(ks)] - totals["delivered"][max(ks)]
+        if gap:
+            print(f"\n  ⚠  {gap} query(s) retrieved the right passage but had every citation")
+            print(f"     suppressed by CITATION_THRESHOLD={CITATION_THRESHOLD}. Recall")
+            print("     overstates delivered quality by that much.")
 
-    print(f"{'='*60}\n")
+    print(f"\n  Labels: {passage}/{n} passage-level, {n - passage}/{n} document-level")
+    if passage < n:
+        print("  Document-level labels only prove the right FILE was retrieved.")
+        print("  Add \"expected_snippet\" to score actual passages (--inspect helps).")
+
+    docs = {q["expected_filename"] for q in queries}
+    if n < 30 or len(docs) < 5:
+        print(f"\n  ⚠  {n} queries over {len(docs)} documents is a weak sample.")
+        print("     With few documents a hit is likely by chance; aim for 30+ queries")
+        print("     across 5+ documents before quoting these numbers.")
+
+    failed = [d for d in details if not d["arms"]["rrf"]["first_hit_rank"]]
+    if failed:
+        print(f"\n  MISSED by rrf (top-{max(ks)}):")
+        for d in failed:
+            got = ", ".join(f"{r['filename']}#{r['chunk_index']}" for r in d["arms"]["rrf"]["top"])
+            print(f"    • {d['question']}\n      got: {got or '(nothing)'}")
+    print(f"{'=' * 68}\n")
+
+
+def check_labels(queries: list[dict], user_id: str) -> int:
+    """Validate authored snippets against the corpus before scoring anything.
+
+    A snippet with a typo, or copied from a PDF viewer rather than from the
+    extracted text, matches no chunk. Every query then scores 0% and reads as a
+    retrieval regression instead of a labelling mistake. Catch it here.
+    """
+    supabase = get_supabase()
+    rows = (
+        supabase.table("document_chunks")
+        .select("filename, chunk_index, content")
+        .eq("user_id", user_id)
+        .limit(5000)
+        .execute()
+    ).data
+    print(f"\nChecking labels against {len(rows)} chunks\n{'=' * 68}")
+    if len(rows) >= 5000:
+        print("  ⚠  hit the 5000-chunk fetch cap; results may be incomplete\n")
+
+    problems = 0
+    for label in queries:
+        question = label["question"]
+        snippet = label.get("expected_snippet")
+        want_file = label["expected_filename"]
+
+        if not snippet:
+            print(f"  ○  {question}\n     document-level label (no snippet yet)")
+            continue
+
+        matches = [r for r in rows if _norm(snippet) in _norm(r["content"])]
+        right = [r for r in matches if r["filename"] == want_file]
+        wrong = [r for r in matches if r["filename"] != want_file]
+
+        if not matches:
+            problems += 1
+            print(f"  ✗  {question}")
+            print(f"     snippet matches NO chunk — typo, or copied from the PDF")
+            print(f"     rather than the extracted text. Re-copy from --inspect.")
+        elif not right:
+            problems += 1
+            print(f"  ✗  {question}")
+            print(f"     snippet only appears in {sorted({r['filename'] for r in wrong})},")
+            print(f"     not in the expected {want_file}")
+        elif len(right) > 1 or wrong:
+            print(f"  ⚠  {question}")
+            print(f"     matches {len(right)} chunks in {want_file}"
+                  + (f" and {len(wrong)} elsewhere" if wrong else ""))
+            print(f"     not distinctive — it will score hits it did not earn")
+        else:
+            hit = right[0]
+            print(f"  ✓  {question}\n     unique -> {hit['filename']} chunk {hit['chunk_index']}")
+
+    labelled = sum(1 for q in queries if q.get("expected_snippet"))
+    print(f"\n  {labelled}/{len(queries)} queries have snippets; {problems} broken")
+    print(f"{'=' * 68}\n")
+    return problems
+
+
+def inspect(question: str, user_id: str, candidate_depth: int) -> None:
+    """Print top chunks verbatim so a gold snippet can be copied out."""
+    rows = rank_by_arm(fetch_candidates(question, user_id, candidate_depth), "rrf")
+    print(f"\nTop chunks for: {question!r}\n{'=' * 68}")
+    for i, r in enumerate(rows[:5], 1):
+        body = re.sub(r"\s+", " ", r["content"]).strip()
+        print(f"\n[{i}] {r['filename']}  chunk {r['chunk_index']}  "
+              f"(dense={r['dense_rank'] or '—'} fts={r['fts_rank'] or '—'})")
+        print(f"    {body[:400]}{'…' if len(body) > 400 else ''}")
+    print(f"\n{'=' * 68}")
+    print('Copy a distinctive phrase from the correct chunk into "expected_snippet".\n')
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Recall@K evaluation")
-    parser.add_argument("--user-id",  required=True, help="Supabase user UUID")
-    parser.add_argument("--queries",  default=str(Path(__file__).parent / "test_queries.json"),
-                        help="Path to test queries JSON")
-    parser.add_argument("--k", nargs="+", type=int, default=[1, 3, 5],
-                        help="K values to evaluate (default: 1 3 5)")
+    parser = argparse.ArgumentParser(description="Hybrid retrieval Recall@K / MRR evaluation")
+    parser.add_argument("--user-id", required=True, help="Supabase user UUID")
+    parser.add_argument("--queries", default=str(Path(__file__).parent / "test_queries.json"))
+    parser.add_argument("--k", nargs="+", type=int, default=[1, 3, 5])
+    parser.add_argument("--candidate-depth", type=int, default=50,
+                        help="Per-arm candidate pool, matches search_chunks (default 50)")
+    parser.add_argument("--inspect", metavar="QUESTION",
+                        help="Print top chunks for one question, to author a snippet label")
+    parser.add_argument("--check-labels", action="store_true",
+                        help="Verify authored snippets match exactly one chunk, then exit")
     args = parser.parse_args()
 
-    run_eval(args.user_id, args.queries, sorted(args.k))
+    if args.inspect:
+        inspect(args.inspect, args.user_id, args.candidate_depth)
+        raise SystemExit(0)
+
+    with open(args.queries) as f:
+        queries = json.load(f)
+
+    if args.check_labels:
+        raise SystemExit(1 if check_labels(queries, args.user_id) else 0)
+
+    ks = sorted(args.k)
+    print(f"\n{'=' * 68}")
+    print("  Hybrid Retrieval Evaluation")
+    print(f"  {len(queries)} queries | K = {ks} | candidate depth = {args.candidate_depth}")
+    print(f"{'=' * 68}\n")
+
+    if queries and not check_parity(queries[0]["question"], args.user_id):
+        print("  ⚠  PARITY FAILED: search_chunks_eval and the production search_documents")
+        print("     path returned different top-5 rankings. The two SQL functions have")
+        print("     drifted — these numbers no longer describe what /chat serves.\n")
+
+    totals, details = evaluate(queries, args.user_id, ks, args.candidate_depth)
+    report(totals, details, queries, ks)

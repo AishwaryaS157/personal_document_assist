@@ -1,27 +1,161 @@
 [
-  {
-    "question": "what is dynamic programming?",
-    "expected_filename": "06DynamicProgramming.pdf",
-    "notes": "should retrieve DP definition chunk"
-  },
-  {
-    "question": "what is memoization?",
-    "expected_filename": "06DynamicProgramming.pdf",
-    "notes": "memoization is a DP technique"
-  },
-  {
-    "question": "what is the knapsack problem?",
-    "expected_filename": "06DynamicProgramming.pdf",
-    "notes": "classic DP problem"
-  },
-  {
-    "question": "what is the SAT problem?",
-    "expected_filename": "3-SAT PROBLEM.pdf",
-    "notes": "boolean satisfiability"
-  },
-  {
-    "question": "what is NP completeness?",
-    "expected_filename": "3-SAT PROBLEM.pdf",
-    "notes": "NP-hard complexity class"
-  }
+  { "question": "what counts as a Sev1 incident?",
+    "expected_filename": "incident-response.md",
+    "expected_snippet": "unreachable or being served incorrectly to more than five percent",
+    "notes": "lexical" },
+
+  { "question": "is it a problem if I raise the alarm and it turns out to be nothing?",
+    "expected_filename": "incident-response.md",
+    "expected_snippet": "over-declaring is explicitly encouraged",
+    "notes": "paraphrase - shares no vocabulary with the source" },
+
+  { "question": "how quickly must the primary responder acknowledge?",
+    "expected_filename": "incident-response.md",
+    "expected_snippet": "primary acknowledges within five minutes",
+    "notes": "lexical" },
+
+  { "question": "how often do updates go out during a Sev1?",
+    "expected_filename": "incident-response.md",
+    "expected_snippet": "Status updates go out every thirty minutes",
+    "notes": "confusable - 'thirty minutes' also appears in deployment-pipeline" },
+
+  { "question": "who signs off on what customers are told?",
+    "expected_filename": "incident-response.md",
+    "expected_snippet": "approved by support before it reaches the status page",
+    "notes": "paraphrase" },
+
+  { "question": "when is a postmortem due?",
+    "expected_filename": "incident-response.md",
+    "expected_snippet": "requires a written postmortem within five working days",
+    "notes": "lexical" },
+
+  { "question": "do we hold individuals responsible when something breaks?",
+    "expected_filename": "incident-response.md",
+    "expected_snippet": "document is blameless by policy",
+    "notes": "paraphrase" },
+
+  { "question": "how long does a change soak in staging?",
+    "expected_filename": "deployment-pipeline.md",
+    "expected_snippet": "at least thirty minutes under synthetic load",
+    "notes": "confusable - 'thirty minutes' also appears in incident-response" },
+
+  { "question": "what does continuous integration check?",
+    "expected_filename": "deployment-pipeline.md",
+    "expected_snippet": "the unit suite, the type checker, and a dependency audit",
+    "notes": "lexical" },
+
+  { "question": "how is fake data produced for the test environment?",
+    "expected_filename": "deployment-pipeline.md",
+    "expected_snippet": "generated values that preserve length and character class",
+    "notes": "paraphrase - source says scrubbing, not fake data" },
+
+  { "question": "how much traffic does a canary get?",
+    "expected_filename": "deployment-pipeline.md",
+    "expected_snippet": "two percent of traffic for twenty minutes",
+    "notes": "lexical" },
+
+  { "question": "how are the accounts in a canary chosen?",
+    "expected_filename": "deployment-pipeline.md",
+    "expected_snippet": "chosen by consistent hashing on account identifier",
+    "notes": "lexical" },
+
+  { "question": "why restore the old build instead of reverting the commit?",
+    "expected_filename": "deployment-pipeline.md",
+    "expected_snippet": "Rebuilding takes eleven minutes",
+    "notes": "paraphrase" },
+
+  { "question": "are schema changes rolled back the same way?",
+    "expected_filename": "deployment-pipeline.md",
+    "expected_snippet": "Migrations must therefore be backward compatible",
+    "notes": "paraphrase - query says schema, source says migrations" },
+
+  { "question": "how long are application logs kept?",
+    "expected_filename": "data-retention.md",
+    "expected_snippet": "Application logs are held for ninety days",
+    "notes": "confusable - 'ninety days' also appears in the encryption section" },
+
+  { "question": "how long do billing records stick around?",
+    "expected_filename": "data-retention.md",
+    "expected_snippet": "Billing records are retained for seven years",
+    "notes": "lexical" },
+
+  { "question": "what happens to the vectors when someone deletes a file?",
+    "expected_filename": "data-retention.md",
+    "expected_snippet": "an embedding computed from a private document is itself derived personal data",
+    "notes": "paraphrase - query says vectors, source says embeddings" },
+
+  { "question": "how do deletions survive a backup restore?",
+    "expected_filename": "data-retention.md",
+    "expected_snippet": "the deletion log is replayed against any restored snapshot",
+    "notes": "lexical" },
+
+  { "question": "can engineers read customer files whenever they want?",
+    "expected_filename": "data-retention.md",
+    "expected_snippet": "Engineers do not hold standing access to customer content",
+    "notes": "paraphrase" },
+
+  { "question": "how often are encryption keys rotated?",
+    "expected_filename": "data-retention.md",
+    "expected_snippet": "key rotation happens every ninety days",
+    "notes": "confusable - 'ninety days' also appears in the log retention section" },
+
+  { "question": "when can a new hire start taking the pager?",
+    "expected_filename": "onboarding.md",
+    "expected_snippet": "kept off the on-call rotation for their first sixty days",
+    "notes": "confusable - 'on-call rotation' also appears in incident-response" },
+
+  { "question": "what should someone ship in their first few days?",
+    "expected_filename": "onboarding.md",
+    "expected_snippet": "The goal for week one is a merged change in production",
+    "notes": "paraphrase" },
+
+  { "question": "in what order should the handbook be read?",
+    "expected_filename": "onboarding.md",
+    "expected_snippet": "the architecture overview, then the deployment pipeline, then incident response",
+    "notes": "hard - names two other documents in the corpus" },
+
+  { "question": "does a manager sit in on the buddy sessions?",
+    "expected_filename": "onboarding.md",
+    "expected_snippet": "These are not status meetings, and managers do not attend",
+    "notes": "lexical" },
+
+  { "question": "how fast should a code review come back?",
+    "expected_filename": "onboarding.md",
+    "expected_snippet": "a first review arrives within one business day",
+    "notes": "lexical" },
+
+  { "question": "how long does an old interface version keep working?",
+    "expected_filename": "api-guidelines.md",
+    "expected_snippet": "supported for eighteen months after its successor ships",
+    "notes": "paraphrase - query says interface, source says version" },
+
+  { "question": "why use cursors rather than page numbers?",
+    "expected_filename": "api-guidelines.md",
+    "expected_snippet": "produce duplicated and skipped records",
+    "notes": "paraphrase" },
+
+  { "question": "what is the maximum page size?",
+    "expected_filename": "api-guidelines.md",
+    "expected_snippet": "The default page size is twenty five and the maximum is two hundred",
+    "notes": "lexical" },
+
+  { "question": "what happens if I ask for more items than allowed?",
+    "expected_filename": "api-guidelines.md",
+    "expected_snippet": "above the maximum are clamped rather than rejected",
+    "notes": "paraphrase" },
+
+  { "question": "can an error code change meaning later?",
+    "expected_filename": "api-guidelines.md",
+    "expected_snippet": "code is part of the contract and never changes meaning",
+    "notes": "lexical" },
+
+  { "question": "do extra API keys give me a bigger allowance?",
+    "expected_filename": "api-guidelines.md",
+    "expected_snippet": "Limits are applied per account rather than per credential",
+    "notes": "paraphrase" },
+
+  { "question": "what happens if a client keeps ignoring the retry hint?",
+    "expected_filename": "api-guidelines.md",
+    "expected_snippet": "a longer cooling period rather than a permanent block",
+    "notes": "lexical" }
 ]

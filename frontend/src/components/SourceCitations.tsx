@@ -44,7 +44,7 @@ export default function SourceCitations({ sources }: Props) {
                   {src.filename}
                 </span>
                 <span className="text-xs text-slate-400">
-                  {Math.round(src.score * 100)}% match
+                  {Math.round(src.score * 100)}% relevance
                 </span>
               </div>
               <p className={`text-xs line-clamp-3 ${highlighted === i ? 'text-brand-800' : 'text-slate-500'}`}>

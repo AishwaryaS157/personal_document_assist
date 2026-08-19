@@ -11,6 +11,14 @@ from app.services.embedding_service import get_embedding as _get_embedding
 CHUNK_SIZE = 1500
 CHUNK_OVERLAP = 150
 
+# Mirrors the RRF constants in supabase/schema.sql. search_chunks returns a raw
+# fusion score of sum(1 / (RRF_K + rank)) over the dense and full-text rankers,
+# so a chunk ranked #1 by both is the ceiling. Divide through by that ceiling so
+# callers see a 0-1 relevance value instead of a number that never exceeds 0.033.
+RRF_K = 60
+RRF_RETRIEVERS = 2
+MAX_RRF_SCORE = RRF_RETRIEVERS / (RRF_K + 1)
+
 _splitter = RecursiveCharacterTextSplitter(
     chunk_size=CHUNK_SIZE,
     chunk_overlap=CHUNK_OVERLAP,
@@ -100,7 +108,7 @@ def search_documents(query: str, user_id: str, n_results: int = 5) -> List[Dict[
             "filename": row["filename"],
             "doc_id": row["doc_id"],
             "chunk_index": row["chunk_index"],
-            "score": row.get("similarity", 0),
+            "score": min(row.get("similarity", 0) / MAX_RRF_SCORE, 1.0),
         }
         for row in result.data
     ]

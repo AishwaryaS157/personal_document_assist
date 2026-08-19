@@ -1,0 +1,55 @@
+# Render blueprint for the FastAPI backend.
+#
+# Why not Vercel: embedding_service downloads a ~90MB ONNX model on first use.
+# On a serverless function that download repeats on every cold start and blows
+# the request timeout. A persistent process pays it once — and here, not even
+# once, because the build step below bakes the model into the service.
+#
+# Deploy: Render dashboard -> New -> Blueprint -> point at this repo.
+# Secrets marked `sync: false` must be filled in the dashboard; they are never
+# committed.
+
+services:
+  - type: web
+    name: personal-doc-assistant-api
+    runtime: python
+    rootDir: backend
+    plan: free
+    healthCheckPath: /health
+
+    # Pre-download the model at build time into a repo-relative directory that
+    # survives into the running service, so the first real request is fast.
+    buildCommand: >-
+      pip install -r requirements.txt &&
+      MODEL_CACHE_DIR=./model_cache python -c
+      "from app.services.embedding_service import get_embedding; get_embedding('warmup')"
+
+    # Uvicorn serves the ASGI app directly. No Lambda adapter, so StreamingResponse
+    # actually streams token by token.
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11"
+
+      # Must match the build command above, or the service re-downloads at runtime.
+      - key: MODEL_CACHE_DIR
+        value: ./model_cache
+
+      # Turns on `secure` on the auth cookie. Render serves HTTPS.
+      - key: ENVIRONMENT
+        value: production
+
+      # Your Vercel frontend origin, e.g. https://your-app.vercel.app
+      - key: FRONTEND_URL
+        sync: false
+
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+
+      - key: JWT_SECRET
+        generateValue: true

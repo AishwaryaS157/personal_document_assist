@@ -134,8 +134,11 @@ async def chat(
     request: ChatRequest,
     current_user: dict = Depends(get_current_user),
 ):
+    # Retrieval stays outside the generator so a failure here is still a real
+    # HTTP error; once the stream opens the status code is already committed.
     sources = search_documents(request.message, current_user["id"], n_results=request.n_sources)
-    chunks = []
-    async for chunk in stream_chat(request.message, sources):
-        chunks.append(chunk)
-    return StreamingResponse(iter(chunks), media_type="text/plain")
+    return StreamingResponse(
+        stream_chat(request.message, sources),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

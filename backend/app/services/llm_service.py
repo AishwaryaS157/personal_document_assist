@@ -17,7 +17,9 @@ When answering:
 - Cite information from the sources when relevant"""
 
 MODEL_NAME = "gemini-2.5-flash"
-CITATION_THRESHOLD = 0.016
+# Normalized 0-1 relevance from search_documents. 0.49 keeps the previous raw
+# cutoff of 0.016: a chunk has to place in the top two of at least one ranker.
+CITATION_THRESHOLD = 0.49
 MAX_SOURCES_IN_CONTEXT = 5
 
 _llm = ChatGoogleGenerativeAI(model=MODEL_NAME, api_key=os.environ["GEMINI_API_KEY"])
