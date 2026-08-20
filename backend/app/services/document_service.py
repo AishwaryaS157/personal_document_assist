@@ -6,10 +6,23 @@ import pdfplumber
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.database import get_supabase
-from app.services.embedding_service import get_embedding as _get_embedding
+from app.services.embedding_service import (
+    get_embedding as _get_embedding,
+    get_embeddings as _get_embeddings,
+)
 
 CHUNK_SIZE = 1500
 CHUNK_OVERLAP = 150
+
+# Chunks per database insert. A whole document in one request means a payload of
+# len(chunks) x (1500 chars + a 384-float vector), which is what stranded large
+# uploads.
+INSERT_BATCH_SIZE = 20
+
+# Chunks per embedding forward pass. Batching is far faster than one call per
+# chunk, but the whole document at once would build a single large tensor, so
+# cap it to keep peak memory flat on a small instance.
+EMBED_BATCH_SIZE = 16
 
 # Mirrors the RRF constants in supabase/schema.sql. search_chunks returns a raw
 # fusion score of sum(1 / (RRF_K + rank)) over the dense and full-text rankers,
@@ -29,6 +42,14 @@ def _chunk_text(text: str) -> List[str]:
     return _splitter.split_text(text)
 
 
+def _get_embeddings_batched(chunks: List[str]) -> List[List[float]]:
+    """Embed every chunk, in fixed-size batches, preserving input order."""
+    out: List[List[float]] = []
+    for start in range(0, len(chunks), EMBED_BATCH_SIZE):
+        out.extend(_get_embeddings(chunks[start:start + EMBED_BATCH_SIZE]))
+    return out
+
+
 def _extract_text(file_bytes: bytes, filename: str) -> str:
     ext = Path(filename).suffix.lower()
     if ext == ".pdf":
@@ -45,6 +66,11 @@ def ingest_document(file_bytes: bytes, filename: str, user_id: str) -> Dict[str,
     if not chunks:
         raise ValueError("No text could be extracted from the document.")
 
+    # One batched forward pass instead of len(chunks) sequential ones. On a
+    # small instance the per-chunk loop was slow enough to push large uploads
+    # past the request timeout.
+    embeddings = _get_embeddings_batched(chunks)
+
     doc = supabase.table("documents").insert({
         "user_id": user_id,
         "filename": filename,
@@ -52,19 +78,31 @@ def ingest_document(file_bytes: bytes, filename: str, user_id: str) -> Dict[str,
     }).execute()
     doc_id = doc.data[0]["id"]
 
-    rows = []
-    for i, chunk in enumerate(chunks):
-        embedding = _get_embedding(chunk)
-        rows.append({
+    rows = [
+        {
             "doc_id": doc_id,
             "user_id": user_id,
             "filename": filename,
             "content": chunk,
             "chunk_index": i,
             "embedding": embedding,
-        })
+        }
+        for i, (chunk, embedding) in enumerate(zip(chunks, embeddings))
+    ]
 
-    supabase.table("document_chunks").insert(rows).execute()
+    # The document row has to exist before chunks can reference it, so a failure
+    # here would otherwise strand a row claiming N chunks with none stored — it
+    # shows up in the sidebar and contributes nothing to retrieval. Insert in
+    # batches so no single request carries the whole document, and remove the
+    # parent row if any batch fails so a failed upload leaves nothing behind.
+    try:
+        for start in range(0, len(rows), INSERT_BATCH_SIZE):
+            supabase.table("document_chunks").insert(
+                rows[start:start + INSERT_BATCH_SIZE]
+            ).execute()
+    except Exception:
+        supabase.table("documents").delete().eq("id", doc_id).execute()
+        raise
     return {"id": doc_id, "filename": filename, "chunk_count": len(chunks)}
 
 
