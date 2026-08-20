@@ -11,7 +11,7 @@ from app.services.embedding_service import (
     get_embeddings as _get_embeddings,
 )
 
-CHUNK_SIZE = 1500
+CHUNK_SIZE = 2000
 CHUNK_OVERLAP = 150
 
 # Chunks per database insert. A whole document in one request means a payload of
