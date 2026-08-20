@@ -19,10 +19,12 @@ CHUNK_OVERLAP = 150
 # uploads.
 INSERT_BATCH_SIZE = 20
 
-# Chunks per embedding forward pass. Batching is far faster than one call per
-# chunk, but the whole document at once would build a single large tensor, so
-# cap it to keep peak memory flat on a small instance.
-EMBED_BATCH_SIZE = 16
+# Chunks per embedding forward pass. Measured on the 35-chunk sample document,
+# peak RSS over three runs each: batch 1 -> 426MB, batch 4 -> 373MB,
+# batch 16 -> 516MB. A 512MB instance OOMs at 16, which is what killed large
+# uploads. 4 is both the lowest-memory and near-fastest setting; raise it only
+# alongside more memory.
+EMBED_BATCH_SIZE = 4
 
 # Mirrors the RRF constants in supabase/schema.sql. search_chunks returns a raw
 # fusion score of sum(1 / (RRF_K + rank)) over the dense and full-text rankers,
