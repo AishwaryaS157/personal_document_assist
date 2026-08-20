@@ -1,7 +1,10 @@
 -- Migration 001: add search_chunks_eval
 -- Safe to run on an existing database: creates one function, touches no
--- tables and drops nothing. Paste this whole file into the Supabase SQL
--- editor. Do NOT paste schema.sql there -- it begins with drop table.
+-- tables and drops nothing. Paste this whole file into the Supabase SQL editor.
+--
+-- The only file in this directory tree that destroys data is
+-- ../reset_database_DESTRUCTIVE.sql. schema.sql and every migration are
+-- idempotent and safe to re-run.
 
 -- Evaluation-only variant of search_chunks. Same two rankers and same fusion,
 -- but it exposes each arm's rank instead of collapsing to the fused score, so

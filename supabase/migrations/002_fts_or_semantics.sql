@@ -1,49 +1,13 @@
--- Canonical schema. SAFE TO RUN ON A DATABASE THAT HAS DATA: every statement
--- is idempotent, nothing is dropped, and re-running it only fills in whatever
--- is missing.
+-- Migration 002: OR semantics for the full-text arm
 --
--- This file used to begin with `drop table ... cascade`, which silently emptied
--- the database when it was run against an existing project. Those statements
--- now live in reset_database_DESTRUCTIVE.sql, where the filename says what they
--- do before you paste them anywhere.
-
-create extension if not exists vector;
-
-create table if not exists users (
-  id            uuid primary key default gen_random_uuid(),
-  email         text unique not null,
-  password_hash text not null,
-  created_at    timestamptz default now()
-);
-
-create table if not exists documents (
-  id          uuid primary key default gen_random_uuid(),
-  user_id     uuid references users(id) not null,
-  filename    text not null,
-  chunk_count int  not null,
-  created_at  timestamptz default now()
-);
-
-create table if not exists document_chunks (
-  id          uuid primary key default gen_random_uuid(),
-  doc_id      uuid references documents(id) on delete cascade not null,
-  user_id     uuid references users(id) not null,
-  filename    text not null,
-  content     text not null,
-  chunk_index int  not null,
-  embedding   vector(384),
-  fts         tsvector generated always as (to_tsvector('english', content)) stored
-);
-
--- Named so that re-running does not stack duplicate indexes.
-create index if not exists document_chunks_embedding_idx
-  on document_chunks using hnsw (embedding vector_cosine_ops);
-create index if not exists document_chunks_fts_idx
-  on document_chunks using gin(fts);
-
-alter table users           disable row level security;
-alter table documents       disable row level security;
-alter table document_chunks disable row level security;
+-- plainto_tsquery ANDs every term, so a passage missing any single word was
+-- excluded outright. Measured on the fixture corpus, the keyword arm reached
+-- only Recall@5 12.5% and RRF was therefore identical to dense-only search.
+-- Both functions are replaced together so the eval keeps matching production.
+--
+-- Safe on an existing database: CREATE OR REPLACE only, no tables touched,
+-- nothing dropped, no re-embedding needed. Paste this whole file into the
+-- Supabase SQL editor.
 
 create or replace function search_chunks(
   query_embedding  vector(384),

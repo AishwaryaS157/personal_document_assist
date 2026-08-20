@@ -91,9 +91,12 @@ def main() -> int:
         print(f"  ingested {f.name:26} -> {meta['chunk_count']} chunks")
 
     print(f"\n  {len(files)} documents, {total} chunks\n")
+    # Absolute paths, and the same interpreter that ran this script, so the
+    # commands work from any directory rather than only from backend/.
+    script = Path(__file__).parent / "recall_eval.py"
     print("Now run:")
-    print(f"  python eval/recall_eval.py --user-id {user_id} --check-labels")
-    print(f"  python eval/recall_eval.py --user-id {user_id}\n")
+    print(f"  {sys.executable} {script} --user-id {user_id} --check-labels")
+    print(f"  {sys.executable} {script} --user-id {user_id}\n")
     return 0
 
 
