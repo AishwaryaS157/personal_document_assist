@@ -5,6 +5,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from app.auth import get_current_user, COOKIE_NAME
 from app.services.auth_service import (
@@ -105,7 +106,13 @@ async def upload_document(
 
     file_bytes = await file.read()
     try:
-        metadata = ingest_document(file_bytes, file.filename, current_user["id"])
+        # ingest_document is CPU-bound (ONNX inference) and makes blocking HTTP
+        # calls. Running it inline on the event loop freezes the whole server
+        # for the duration: other requests stall, and the platform's health
+        # checks fail. Hand it to a worker thread so the loop stays free.
+        metadata = await run_in_threadpool(
+            ingest_document, file_bytes, file.filename, current_user["id"]
+        )
     except ValueError as e:
         raise HTTPException(422, str(e))
     return metadata
@@ -136,7 +143,11 @@ async def chat(
 ):
     # Retrieval stays outside the generator so a failure here is still a real
     # HTTP error; once the stream opens the status code is already committed.
-    sources = search_documents(request.message, current_user["id"], n_results=request.n_sources)
+    # Threadpooled for the same reason as the upload path: it embeds the query
+    # and makes a blocking database call, both of which would stall the loop.
+    sources = await run_in_threadpool(
+        search_documents, request.message, current_user["id"], request.n_sources
+    )
     return StreamingResponse(
         stream_chat(request.message, sources),
         media_type="application/x-ndjson",
