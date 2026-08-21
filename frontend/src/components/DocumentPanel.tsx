@@ -1,7 +1,14 @@
 import { useRef, useState } from 'react'
 import { Upload, Trash2, FileText, Loader2 } from 'lucide-react'
-import { uploadDocument, deleteDocument } from '../api/client'
+import { uploadDocument, deleteDocument, fetchDocuments } from '../api/client'
 import type { Document } from '../types'
+
+// A large upload can outlive the proxy's patience: the request errors in the
+// browser while the server keeps working and finishes the ingest. Rather than
+// report a failure the user can disprove by reloading, poll the document list
+// for a while and see whether the file actually arrived.
+const RECOVER_ATTEMPTS = 8
+const RECOVER_DELAY_MS = 3000
 
 interface Props {
   documents: Document[]
@@ -15,18 +22,51 @@ export default function DocumentPanel({ documents, onUploaded, onDeleted }: Prop
   const [error, setError] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [recovering, setRecovering] = useState<string | null>(null)
+
+  /** Poll for a document that isn't among `known`, appearing under `filename`. */
+  const waitForUpload = async (
+    filename: string,
+    known: Set<string>,
+  ): Promise<Document | null> => {
+    for (let attempt = 0; attempt < RECOVER_ATTEMPTS; attempt++) {
+      await new Promise((r) => setTimeout(r, RECOVER_DELAY_MS))
+      try {
+        const docs = await fetchDocuments()
+        const match = docs.find((d) => d.filename === filename && !known.has(d.id))
+        if (match) return match
+      } catch {
+        // The list call can fail transiently too; keep waiting.
+      }
+    }
+    return null
+  }
 
   const handleFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return
     setError(null)
     setUploading(true)
+    // Tracked here rather than read from props, so files uploaded earlier in
+    // this same batch aren't mistaken for the one we're waiting on.
+    const known = new Set(documents.map((d) => d.id))
     try {
       for (const file of Array.from(files)) {
-        const doc = await uploadDocument(file)
-        onUploaded(doc)
+        try {
+          const doc = await uploadDocument(file)
+          known.add(doc.id)
+          onUploaded(doc)
+        } catch (e) {
+          setRecovering(file.name)
+          const recovered = await waitForUpload(file.name, known)
+          setRecovering(null)
+          if (recovered) {
+            known.add(recovered.id)
+            onUploaded(recovered)
+          } else {
+            setError(e instanceof Error ? e.message : 'Upload failed')
+          }
+        }
       }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Upload failed')
     } finally {
       setUploading(false)
       if (inputRef.current) inputRef.current.value = ''
@@ -70,7 +110,11 @@ export default function DocumentPanel({ documents, onUploaded, onDeleted }: Prop
           <Upload size={22} className="text-slate-400" />
         )}
         <p className="text-xs text-slate-500 text-center">
-          {uploading ? 'Uploading…' : 'Click or drag PDF, TXT, MD files here'}
+          {recovering
+            ? `Still processing ${recovering}… large files can take a minute`
+            : uploading
+              ? 'Uploading…'
+              : 'Click or drag PDF, TXT, MD files here'}
         </p>
         <input
           ref={inputRef}
